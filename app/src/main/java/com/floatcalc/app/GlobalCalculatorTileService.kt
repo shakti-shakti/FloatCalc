@@ -1,5 +1,6 @@
 package com.floatcalc.app
 
+import android.app.PendingIntent
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -29,6 +30,25 @@ class GlobalCalculatorTileService : TileService() {
     override fun onClick() {
         super.onClick()
         val prefs = getSharedPreferences(FloatCalcPreferences.PREFS_NAME, MODE_PRIVATE)
+
+        if (!hasOverlayPermission()) {
+            // A tile can be tapped while its saved state still says enabled, for
+            // example after the user revoked the permission in Android Settings.
+            // Always route that case to Settings instead of trying to start the
+            // overlay service or toggling into an invalid state.
+            prefs.edit()
+                .putBoolean(FloatCalcPreferences.PREF_FLOATING_CALCULATOR, false)
+                .apply()
+            stopService(
+                Intent(this, CalculatorOverlayService::class.java).apply {
+                    action = CalculatorOverlayService.ACTION_STOP
+                }
+            )
+            setTileState(false)
+            openOverlayPermissionSettings()
+            return
+        }
+
         val currentlyEnabled =
             prefs.getBoolean(FloatCalcPreferences.PREF_FLOATING_CALCULATOR, false)
 
@@ -43,25 +63,6 @@ class GlobalCalculatorTileService : TileService() {
             )
             setTileState(false)
             Toast.makeText(this, "Global calculator disabled", Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
-            !Settings.canDrawOverlays(this)
-        ) {
-            setTileState(false)
-            Toast.makeText(
-                this,
-                "Allow Display over other apps, then tap the tile again",
-                Toast.LENGTH_LONG
-            ).show()
-            @Suppress("DEPRECATION")
-            startActivityAndCollapse(
-                Intent(
-                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                    Uri.parse("package:$packageName")
-                )
-            )
             return
         }
 
@@ -80,8 +81,66 @@ class GlobalCalculatorTileService : TileService() {
 
     private fun updateTileState() {
         val enabled = getSharedPreferences(FloatCalcPreferences.PREFS_NAME, MODE_PRIVATE)
-            .getBoolean(FloatCalcPreferences.PREF_FLOATING_CALCULATOR, false)
+            .getBoolean(FloatCalcPreferences.PREF_FLOATING_CALCULATOR, false) &&
+            hasOverlayPermission()
         setTileState(enabled)
+    }
+
+    private fun hasOverlayPermission(): Boolean =
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(this)
+
+    /**
+     * Android 14 deprecated the Intent overload for this API and may reject it
+     * from the Quick Settings shade. Use a PendingIntent on Android 14+ and
+     * retain the older overload for earlier releases.
+     */
+    private fun openOverlayPermissionSettings() {
+        val appSettingsIntent = Intent(
+            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+            Uri.parse("package:$packageName")
+        )
+        val generalSettingsIntent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION)
+
+        try {
+            launchSettingsIntent(appSettingsIntent)
+        } catch (_: Exception) {
+            // Some Android builds reject the app-specific Settings route from a
+            // tile even though the action itself is supported.
+            launchSettingsIntentSafely(generalSettingsIntent)
+        }
+    }
+
+    private fun launchSettingsIntent(intent: Intent) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            val pendingIntent = PendingIntent.getActivity(
+                this,
+                OVERLAY_PERMISSION_REQUEST_CODE,
+                intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            startActivityAndCollapse(pendingIntent)
+        } else {
+            @Suppress("DEPRECATION")
+            startActivityAndCollapse(intent)
+        }
+    }
+
+    private fun launchSettingsIntentSafely(intent: Intent) {
+        try {
+            launchSettingsIntent(intent)
+        } catch (_: Exception) {
+            // The final fallback still opens the system Settings screen without
+            // relying on Quick Settings' collapse support.
+            try {
+                startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            } catch (_: Exception) {
+                Toast.makeText(
+                    this,
+                    "Open Settings > Apps > Special app access > Display over other apps",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+        }
     }
 
     private fun setTileState(enabled: Boolean) {
@@ -105,5 +164,7 @@ class GlobalCalculatorTileService : TileService() {
                 )
             }
         }
+
+        private const val OVERLAY_PERMISSION_REQUEST_CODE = 9203
     }
 }

@@ -1,8 +1,13 @@
-modules = ["python-base-3.13"]
+modules = ["python-base-3.13", "java-graalvm22.3"]
 
 [[ports]]
 localPort = 8080
 externalPort = 8080
+
+[[ports]]
+localPort = 17718
+externalPort = 3000
+exposeLocalhost = true
 
 [[ports]]
 localPort = 18725
