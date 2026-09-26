@@ -1,0 +1,63 @@
+plugins {
+    id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
+}
+
+android {
+    namespace 'com.floatcalc.app'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.floatcalc.app"
+        minSdk 21
+        targetSdk 34
+        versionCode 1
+        versionName "1.0.0"
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    signingConfigs {
+        release {
+            def configuredKeystore = System.getenv("KEYSTORE_FILE")
+            def projectKeystore = file("${rootDir}/my-release-key.jks")
+            storeFile configuredKeystore != null
+                ? file(configuredKeystore)
+                : projectKeystore
+            storePassword System.getenv("KEYSTORE_PASSWORD") ?: "Sh@090609"
+            keyAlias System.getenv("KEY_ALIAS") ?: "my-key"
+            keyPassword System.getenv("KEY_PASSWORD") ?: "Sh@090609"
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.release
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+        debug {
+            signingConfig signingConfigs.release
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+
+    kotlinOptions {
+        jvmTarget = '1.8'
+    }
+
+    packagingOptions {
+        resources {
+            excludes += ['/META-INF/{AL2.0,LGPL2.1}']
+        }
+    }
+}
+
+dependencies {
+    implementation 'androidx.core:core-ktx:1.13.1'
+    implementation 'com.google.android.material:material:1.12.0'
+    testImplementation 'junit:junit:4.13.2'
+}

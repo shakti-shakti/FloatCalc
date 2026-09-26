@@ -1,0 +1,1 @@
+# FloatCalc intentionally keeps its small service-only application unminified.
