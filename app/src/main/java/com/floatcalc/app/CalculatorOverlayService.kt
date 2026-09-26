@@ -148,6 +148,7 @@ class CalculatorOverlayService : Service() {
                         val maxY = resources.displayMetrics.heightPixels - params.height
                         params.x = (startX + dx.roundToInt()).coerceIn(0, maxX.coerceAtLeast(0))
                         params.y = (startY + dy.roundToInt()).coerceIn(0, maxY.coerceAtLeast(0))
+                        saveIconPosition(params.x, params.y)
                         try {
                             windowManager.updateViewLayout(root, params)
                         } catch (_: Exception) {
@@ -179,8 +180,18 @@ class CalculatorOverlayService : Service() {
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = dp(26f)
-            y = dp(180f)
+            val preferences = getSharedPreferences(
+                FloatCalcPreferences.PREFS_NAME,
+                MODE_PRIVATE
+            )
+            x = preferences.getInt(
+                FloatCalcPreferences.PREF_FLOATING_ICON_X,
+                dp(26f)
+            ).coerceIn(0, (resources.displayMetrics.widthPixels - size).coerceAtLeast(0))
+            y = preferences.getInt(
+                FloatCalcPreferences.PREF_FLOATING_ICON_Y,
+                dp(180f)
+            ).coerceIn(0, (resources.displayMetrics.heightPixels - size).coerceAtLeast(0))
         }
     }
 
@@ -191,6 +202,7 @@ class CalculatorOverlayService : Service() {
         val dp = resources.displayMetrics.density
         fun px(value: Int) = (value * dp + 0.5f).toInt()
         val width = (screenWidth - px(24)).coerceAtLeast(px(320)).coerceAtMost(px(560))
+        val preferences = getSharedPreferences(FloatCalcPreferences.PREFS_NAME, MODE_PRIVATE)
         val view = FloatingCalculatorView(
             context = this,
             onClose = { closeCalculator() },
@@ -218,8 +230,14 @@ class CalculatorOverlayService : Service() {
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = ((screenWidth - width) / 2).coerceAtLeast(0)
-            y = px(26)
+            x = preferences.getInt(
+                FloatCalcPreferences.PREF_FLOATING_CALCULATOR_X,
+                ((screenWidth - width) / 2).coerceAtLeast(0)
+            ).coerceIn(0, (screenWidth - width).coerceAtLeast(0))
+            y = preferences.getInt(
+                FloatCalcPreferences.PREF_FLOATING_CALCULATOR_Y,
+                px(26)
+            ).coerceAtLeast(0)
         }
 
         try {
@@ -263,6 +281,15 @@ class CalculatorOverlayService : Service() {
         restoreScale = savedScale
         params.width = (calculatorBaseWidth * savedScale).roundToInt().coerceAtLeast(1)
         params.height = (calculatorBaseHeight * savedScale).roundToInt().coerceAtLeast(1)
+        params.x = params.x.coerceIn(
+            0,
+            (resources.displayMetrics.widthPixels - params.width).coerceAtLeast(0)
+        )
+        params.y = params.y.coerceIn(
+            0,
+            (resources.displayMetrics.heightPixels - params.height).coerceAtLeast(0)
+        )
+        saveCalculatorPosition(params.x, params.y)
         try {
             windowManager.updateViewLayout(root, params)
         } catch (_: Exception) {
@@ -276,6 +303,7 @@ class CalculatorOverlayService : Service() {
         val maxY = (resources.displayMetrics.heightPixels - params.height).coerceAtLeast(0)
         params.x = (params.x + dx).roundToInt().coerceIn(0, maxX)
         params.y = (params.y + dy).roundToInt().coerceIn(0, maxY)
+        saveCalculatorPosition(params.x, params.y)
         try {
             windowManager.updateViewLayout(root, params)
         } catch (_: Exception) {
@@ -312,6 +340,22 @@ class CalculatorOverlayService : Service() {
         getSharedPreferences(FloatCalcPreferences.PREFS_NAME, MODE_PRIVATE)
             .edit()
             .putFloat(FloatCalcPreferences.PREF_FLOATING_CALCULATOR_SCALE, scale)
+            .apply()
+    }
+
+    private fun saveIconPosition(x: Int, y: Int) {
+        getSharedPreferences(FloatCalcPreferences.PREFS_NAME, MODE_PRIVATE)
+            .edit()
+            .putInt(FloatCalcPreferences.PREF_FLOATING_ICON_X, x)
+            .putInt(FloatCalcPreferences.PREF_FLOATING_ICON_Y, y)
+            .apply()
+    }
+
+    private fun saveCalculatorPosition(x: Int, y: Int) {
+        getSharedPreferences(FloatCalcPreferences.PREFS_NAME, MODE_PRIVATE)
+            .edit()
+            .putInt(FloatCalcPreferences.PREF_FLOATING_CALCULATOR_X, x)
+            .putInt(FloatCalcPreferences.PREF_FLOATING_CALCULATOR_Y, y)
             .apply()
     }
 
