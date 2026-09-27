@@ -37,6 +37,7 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import kotlin.math.abs
 import kotlin.math.roundToInt
 
 private const val BACKSPACE_REPEAT_START_DELAY_MS = 350L
@@ -654,10 +655,17 @@ class FloatingCalculatorView(
     }
 
     private fun openFormulaCard(card: FormulaCard) {
+        val cardIndex = formulaCards.indexOf(card)
+        if (cardIndex < 0) return
+        openFormulaCardAt(cardIndex)
+    }
+
+    private fun openFormulaCardAt(cardIndex: Int) {
         if (!formulaModeEnabled || modeTransitionRunning) return
+        if (cardIndex !in formulaCards.indices) return
         formulaDetailOpen = true
         formulaBackButton?.visibility = View.VISIBLE
-        swapFormulaContent(buildFormulaDetail(card))
+        swapFormulaContent(buildFormulaDetail(formulaCards[cardIndex], cardIndex))
     }
 
     private fun swapFormulaContent(next: View) {
@@ -816,7 +824,7 @@ class FloatingCalculatorView(
         return BitmapFactory.decodeResource(resources, imageRes, options)
     }
 
-    private fun buildFormulaDetail(card: FormulaCard): View {
+    private fun buildFormulaDetail(card: FormulaCard, cardIndex: Int): View {
         val drawable = resources.getDrawable(card.imageRes, null)
         val availableWidth = (if (measuredWidth > 0) measuredWidth else width)
             .coerceAtLeast(dp(220)) - dp(8)
@@ -828,14 +836,20 @@ class FloatingCalculatorView(
         }
         return FrameLayout(context).apply {
             setBackgroundColor(Color.parseColor("#0B1020"))
-            addView(ZoomableFormulaImageView(context).apply {
-            setImageResource(card.imageRes)
-            contentDescription = "${card.title}. Pinch to zoom and drag to inspect."
-            layoutParams = FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                imageHeight.coerceAtLeast(dp(170))
+            addView(
+                ZoomableFormulaImageView(context) { direction ->
+                    openFormulaCardAt(cardIndex + direction)
+                }.apply {
+                    setImageResource(card.imageRes)
+                    contentDescription =
+                        "${card.title}. Swipe left or right to change formula. " +
+                            "Pinch to zoom and drag to inspect."
+                    layoutParams = FrameLayout.LayoutParams(
+                        FrameLayout.LayoutParams.MATCH_PARENT,
+                        imageHeight.coerceAtLeast(dp(170))
+                    )
+                }
             )
-        })
         }
     }
 
@@ -846,13 +860,20 @@ class FloatingCalculatorView(
         }
     }
 
-    private class ZoomableFormulaImageView(context: Context) : ImageView(context) {
+    private class ZoomableFormulaImageView(
+        context: Context,
+        private val onSwipe: (Int) -> Unit
+    ) : ImageView(context) {
         private val renderMatrix = Matrix()
         private var zoom = 1f
         private var panX = 0f
         private var panY = 0f
+        private var downX = 0f
+        private var downY = 0f
         private var lastX = 0f
         private var lastY = 0f
+        private var multiTouchGesture = false
+        private val swipeDistance = 64f * resources.displayMetrics.density
         private val doubleTapDetector = GestureDetector(
             context,
             object : GestureDetector.SimpleOnGestureListener() {
@@ -897,8 +918,14 @@ class FloatingCalculatorView(
             scaleDetector.onTouchEvent(event)
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
+                    downX = event.x
+                    downY = event.y
                     lastX = event.x
                     lastY = event.y
+                    multiTouchGesture = false
+                }
+                MotionEvent.ACTION_POINTER_DOWN -> {
+                    multiTouchGesture = true
                 }
                 MotionEvent.ACTION_MOVE -> {
                     if (!scaleDetector.isInProgress && event.pointerCount == 1 && zoom > 1f) {
@@ -908,6 +935,15 @@ class FloatingCalculatorView(
                     }
                     lastX = event.x
                     lastY = event.y
+                }
+                MotionEvent.ACTION_UP -> {
+                    val deltaX = event.x - downX
+                    val deltaY = event.y - downY
+                    val isHorizontalSwipe = abs(deltaX) >= swipeDistance &&
+                        abs(deltaX) > abs(deltaY) * 1.2f
+                    if (!multiTouchGesture && zoom <= 1f && isHorizontalSwipe) {
+                        onSwipe(if (deltaX < 0f) 1 else -1)
+                    }
                 }
             }
             return true
