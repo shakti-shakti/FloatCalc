@@ -802,72 +802,26 @@ class FloatingCalculatorView(
     }
 
     private fun buildFormulaDetail(card: FormulaCard): View {
-        val detail = LinearLayout(context).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(7), dp(5), dp(7), dp(7))
-        }
-        detail.addView(TextView(context).apply {
-            text = card.title
-            textSize = 15f
-            typeface = Typeface.DEFAULT_BOLD
-            gravity = Gravity.CENTER
-            setTextColor(Color.WHITE)
-            background = gradientRounded(
-                intArrayOf(Color.parseColor("#4B75C1"), Color.parseColor("#29245D")),
-                Color.parseColor("#A7D1FF"),
-                14,
-                1
-            )
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                dp(36)
-            ).apply {
-                bottomMargin = dp(4)
-            }
-        })
-        detail.addView(TextView(context).apply {
-            text = card.description
-            textSize = 10f
-            gravity = Gravity.CENTER
-            setTextColor(Color.parseColor("#B8C8EF"))
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                dp(28)
-            )
-        })
-
         val drawable = resources.getDrawable(card.imageRes, null)
-        val availableWidth = (if (width > 0) width else resources.displayMetrics.widthPixels) -
-            dp(30)
+        val availableWidth = (if (measuredWidth > 0) measuredWidth else width)
+            .coerceAtLeast(dp(220)) - dp(8)
         val imageHeight = if (drawable.intrinsicWidth > 0 && drawable.intrinsicHeight > 0) {
             (availableWidth.coerceAtLeast(dp(220)) * drawable.intrinsicHeight.toFloat() /
                 drawable.intrinsicWidth.toFloat()).roundToInt()
         } else {
             dp(220)
         }
-        val viewportHeight = imageHeight.coerceIn(dp(170), dp(520))
-        val image = ZoomableFormulaImageView(context).apply {
+        return FrameLayout(context).apply {
+            setBackgroundColor(Color.parseColor("#0B1020"))
+            addView(ZoomableFormulaImageView(context).apply {
             setImageResource(card.imageRes)
             contentDescription = "${card.title}. Pinch to zoom and drag to inspect."
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
                 imageHeight.coerceAtLeast(dp(170))
             )
+        })
         }
-        detail.addView(
-            ScrollView(context).apply {
-                isFillViewport = false
-                isVerticalScrollBarEnabled = true
-                overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
-                setBackgroundColor(Color.parseColor("#0B1020"))
-                addView(image)
-            },
-            LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                viewportHeight
-            )
-        )
-        return detail
     }
 
     private fun notifyContentSizeChanged() {
@@ -884,11 +838,28 @@ class FloatingCalculatorView(
         private var panY = 0f
         private var lastX = 0f
         private var lastY = 0f
+        private val doubleTapDetector = GestureDetector(
+            context,
+            object : GestureDetector.SimpleOnGestureListener() {
+                override fun onDown(event: MotionEvent): Boolean = true
+
+                override fun onDoubleTap(event: MotionEvent): Boolean {
+                    val nextZoom = if (zoom < 1.9f) 2.5f else 1f
+                    setZoomAt(nextZoom, event.x, event.y)
+                    performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                    return true
+                }
+            }
+        )
         private val scaleDetector = ScaleGestureDetector(
             context,
             object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
                 override fun onScale(detector: ScaleGestureDetector): Boolean {
-                    zoom = (zoom * detector.scaleFactor).coerceIn(1f, 4f)
+                    setZoomAt(
+                        (zoom * detector.scaleFactor).coerceIn(1f, 4f),
+                        detector.focusX,
+                        detector.focusY
+                    )
                     applyImageMatrix()
                     return true
                 }
@@ -907,6 +878,7 @@ class FloatingCalculatorView(
         }
 
         override fun onTouchEvent(event: MotionEvent): Boolean {
+            doubleTapDetector.onTouchEvent(event)
             scaleDetector.onTouchEvent(event)
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
@@ -914,7 +886,7 @@ class FloatingCalculatorView(
                     lastY = event.y
                 }
                 MotionEvent.ACTION_MOVE -> {
-                    if (!scaleDetector.isInProgress && zoom > 1f) {
+                    if (!scaleDetector.isInProgress && event.pointerCount == 1 && zoom > 1f) {
                         panX += event.x - lastX
                         panY += event.y - lastY
                         applyImageMatrix()
@@ -924,6 +896,20 @@ class FloatingCalculatorView(
                 }
             }
             return true
+        }
+
+        private fun setZoomAt(targetZoom: Float, focusX: Float, focusY: Float) {
+            val oldZoom = zoom
+            val newZoom = targetZoom.coerceIn(1f, 4f)
+            if (oldZoom <= 0f) {
+                zoom = newZoom
+                return
+            }
+            val ratio = newZoom / oldZoom
+            panX += (focusX - width / 2f) * (1f - ratio)
+            panY += (focusY - height / 2f) * (1f - ratio)
+            zoom = newZoom
+            applyImageMatrix()
         }
 
         private fun applyImageMatrix() {
