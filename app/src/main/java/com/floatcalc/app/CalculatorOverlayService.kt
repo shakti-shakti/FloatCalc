@@ -209,7 +209,8 @@ class CalculatorOverlayService : Service() {
             onMinimize = { closeCalculator() },
             onMaximize = { toggleCalculatorMaximize() },
             onDrag = { dx, dy -> moveCalculator(dx, dy) },
-            onResize = { dx, dy -> resizeCalculator(dx, dy) }
+            onResize = { dx, dy -> resizeCalculator(dx, dy) },
+            onContentSizeChanged = { resizeCalculatorWindowToContent() }
         )
         val windowRoot = FrameLayout(this).apply {
             setBackgroundColor(Color.TRANSPARENT)
@@ -327,6 +328,50 @@ class CalculatorOverlayService : Service() {
         try {
             windowManager.updateViewLayout(root, params)
         } catch (_: Exception) {
+        }
+    }
+
+    private fun resizeCalculatorWindowToContent() {
+        val root = calculatorWindowRoot ?: return
+        val view = calculatorView ?: return
+        val params = calculatorParams ?: return
+        if (calculatorBaseWidth <= 0) return
+
+        root.post {
+            if (calculatorWindowRoot !== root || calculatorView !== view) return@post
+            view.layoutParams = FrameLayout.LayoutParams(
+                calculatorBaseWidth,
+                FrameLayout.LayoutParams.WRAP_CONTENT
+            )
+            view.measure(
+                View.MeasureSpec.makeMeasureSpec(
+                    calculatorBaseWidth,
+                    View.MeasureSpec.EXACTLY
+                ),
+                View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
+            )
+            val naturalHeight = view.measuredHeight
+            if (naturalHeight <= 0) return@post
+
+            calculatorBaseHeight = naturalHeight
+            view.layoutParams = FrameLayout.LayoutParams(
+                calculatorBaseWidth,
+                calculatorBaseHeight
+            )
+            val scale = view.scaleY.takeIf { it.isFinite() && it > 0f } ?: 1f
+            params.height = (calculatorBaseHeight * scale).roundToInt().coerceAtLeast(1)
+            params.x = params.x.coerceIn(
+                0,
+                (resources.displayMetrics.widthPixels - params.width).coerceAtLeast(0)
+            )
+            params.y = params.y.coerceIn(
+                0,
+                (resources.displayMetrics.heightPixels - params.height).coerceAtLeast(0)
+            )
+            try {
+                windowManager.updateViewLayout(root, params)
+            } catch (_: Exception) {
+            }
         }
     }
 

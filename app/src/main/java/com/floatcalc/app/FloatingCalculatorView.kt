@@ -4,9 +4,12 @@ import android.content.Context
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.res.ColorStateList
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.LinearGradient
+import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.PixelFormat
 import android.graphics.RectF
@@ -24,13 +27,17 @@ import android.view.Gravity
 import android.view.GestureDetector
 import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
+import android.view.ScaleGestureDetector
 import android.view.View
 import android.widget.Button
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
+import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
+import kotlin.math.roundToInt
 
 private const val BACKSPACE_REPEAT_START_DELAY_MS = 350L
 private const val BACKSPACE_REPEAT_INTERVAL_MS = 70L
@@ -47,7 +54,8 @@ class FloatingCalculatorView(
     private val onMinimize: () -> Unit,
     private val onMaximize: () -> Unit,
     private val onDrag: (Float, Float) -> Unit,
-    private val onResize: (Float, Float) -> Unit
+    private val onResize: (Float, Float) -> Unit,
+    private val onContentSizeChanged: () -> Unit = {}
 ) : FrameLayout(context) {
 
     private val density = resources.displayMetrics.density
@@ -99,6 +107,69 @@ class FloatingCalculatorView(
     private val backspaceRepeatHandler = Handler(Looper.getMainLooper())
     private var backspaceRepeatRunnable: Runnable? = null
     private var backspaceRepeatTriggered = false
+    private lateinit var contentContainer: LinearLayout
+    private lateinit var calculatorBody: LinearLayout
+    private lateinit var formulaBody: FrameLayout
+    private var calculatorModePill: ImageView? = null
+    private var formulaModePill: ImageView? = null
+    private var formulaBackButton: TextView? = null
+    private var formulaModeEnabled = false
+    private var formulaDetailOpen = false
+    private var modeTransitionRunning = false
+
+    private data class FormulaCard(
+        val title: String,
+        val imageRes: Int,
+        val description: String
+    )
+
+    private val formulaCards = listOf(
+        FormulaCard(
+            "Trig Values, AP & GP",
+            R.drawable.formula_trig_values_progressions,
+            "Standard trigonometric values, arithmetic progression and geometric progression."
+        ),
+        FormulaCard(
+            "Trig Identities & Angles",
+            R.drawable.formula_trig_identities,
+            "Core identities, compound angles, double angles and small-angle approximations."
+        ),
+        FormulaCard(
+            "Quadrants & Sign Rules",
+            R.drawable.formula_quadrants,
+            "Quadrant signs and the related trigonometric function changes."
+        ),
+        FormulaCard(
+            "Logarithms & Common Values",
+            R.drawable.formula_logarithms,
+            "Logarithm rules with frequently used common and natural log values."
+        ),
+        FormulaCard(
+            "Maxima & Minima",
+            R.drawable.formula_maxima_minima,
+            "Graphical intuition and the derivative test for extrema."
+        ),
+        FormulaCard(
+            "Science Conversions I",
+            R.drawable.formula_science_conversions_1,
+            "Volume, pressure, SI prefixes, light year, energy and the gas constant."
+        ),
+        FormulaCard(
+            "Science Conversions II",
+            R.drawable.formula_science_conversions_2,
+            "Wave relation, force, absolute temperature, mass and temperature conversion."
+        ),
+        FormulaCard(
+            "Physical & Chemical Constants",
+            R.drawable.formula_physical_constants,
+            "A reference table of important physical and chemical constants."
+        ),
+        FormulaCard(
+            "Common Molar Masses",
+            R.drawable.formula_molar_masses,
+            "Common elements with atomic numbers, mass numbers and molar masses."
+        )
+    )
 
     private data class CalculatorKey(
         val id: String,
@@ -128,17 +199,41 @@ class FloatingCalculatorView(
     }
 
     private fun buildUi() {
-        val content = LinearLayout(context).apply {
+        contentContainer = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(4), dp(2), dp(4), dp(2))
         }
-        addView(content, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
+        addView(
+            contentContainer,
+            LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT)
+        )
 
         val header = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(2), 0, 0, dp(4))
         }
+        formulaBackButton = TextView(context).apply {
+            text = "‹"
+            textSize = 30f
+            gravity = Gravity.CENTER
+            setTextColor(Color.parseColor("#D8E6FF"))
+            contentDescription = "Back to formula cards"
+            background = gradientRounded(
+                intArrayOf(Color.parseColor("#405E9C"), Color.parseColor("#202F57")),
+                Color.parseColor("#89B8FF"),
+                12
+            )
+            visibility = View.GONE
+            layoutParams = LinearLayout.LayoutParams(dp(34), dp(38)).apply {
+                rightMargin = dp(5)
+            }
+        }.also {
+            addPressFeedback(it)
+            it.setOnClickListener { showFormulaGrid() }
+        }
+        header.addView(formulaBackButton)
+
         val headerIcon = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
@@ -174,16 +269,33 @@ class FloatingCalculatorView(
         header.addView(headerIcon, LinearLayout.LayoutParams(dp(38), dp(38)).apply {
             rightMargin = dp(10)
         })
-        val title = TextView(context).apply {
-            text = "Calculator"
-            textSize = 16f
-            typeface = Typeface.DEFAULT_BOLD
-            setTextColor(textPrimary)
+        val modeSwitch = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
             layoutParams = LinearLayout.LayoutParams(0, dp(38), 1f)
-            gravity = Gravity.CENTER_VERTICAL
         }
-        header.addView(title)
-        installDragTouch(title)
+        calculatorModePill = modePill(
+            R.drawable.ic_mode_calculator,
+            "Calculator mode",
+            selected = true
+        ) {
+            showCalculatorMode()
+        }
+        formulaModePill = modePill(
+            R.drawable.ic_mode_formula,
+            "Formula cards",
+            selected = false
+        ) {
+            showFormulaMode()
+        }
+        modeSwitch.addView(calculatorModePill, LinearLayout.LayoutParams(dp(38), dp(34)).apply {
+            rightMargin = dp(3)
+        })
+        modeSwitch.addView(formulaModePill, LinearLayout.LayoutParams(dp(38), dp(34)).apply {
+            leftMargin = dp(3)
+        })
+        header.addView(modeSwitch)
+        installDragTouch(modeSwitch)
         header.addView(headerButton("−", Color.parseColor("#9BB5E8")) { onMinimize() })
         header.addView(headerButton("□", Color.parseColor("#C8DDFF")) { onMaximize() })
         header.addView(headerButton("×", Color.parseColor("#FF9CAF"), true) { onClose() })
@@ -198,9 +310,20 @@ class FloatingCalculatorView(
         }
         header.addView(headerGrip)
         installDragTouch(headerGrip)
-        content.addView(header, LinearLayout.LayoutParams(
+        contentContainer.addView(header, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, dp(48)
         ))
+
+        calculatorBody = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+        contentContainer.addView(
+            calculatorBody,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+        )
 
         val display = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
@@ -319,7 +442,7 @@ class FloatingCalculatorView(
             setOnClickListener { copyText(text?.toString().orEmpty()) }
             contentDescription = "Copy result"
         }.also { resultDisplay = it })
-        content.addView(display, LinearLayout.LayoutParams(
+        calculatorBody.addView(display, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, dp(178)
         ).apply {
             topMargin = dp(2)
@@ -333,7 +456,7 @@ class FloatingCalculatorView(
                 6
             )
         }
-        content.addView(displayHandle, LinearLayout.LayoutParams(dp(48), dp(5)).apply {
+        calculatorBody.addView(displayHandle, LinearLayout.LayoutParams(dp(48), dp(5)).apply {
             gravity = Gravity.CENTER_HORIZONTAL
             bottomMargin = dp(10)
         })
@@ -366,10 +489,30 @@ class FloatingCalculatorView(
                     bottomMargin = if (rowIndex == rows.lastIndex) dp(2) else dp(4)
                 })
             }
-            content.addView(row, LinearLayout.LayoutParams(
+            calculatorBody.addView(row, LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, dp(62)
             ))
         }
+
+        formulaBody = FrameLayout(context).apply {
+            visibility = View.GONE
+            clipChildren = false
+            clipToPadding = false
+        }
+        formulaBody.addView(
+            buildFormulaGrid(),
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT
+            )
+        )
+        contentContainer.addView(
+            formulaBody,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+        )
 
         val resizeHandle = ResizeHandleView(context).apply {
             var lastRawX = 0f
@@ -401,6 +544,414 @@ class FloatingCalculatorView(
 
         // The full OpenCalc evaluator is connected below the reference panel.
         isClickable = true
+    }
+
+    private fun modePill(
+        iconRes: Int,
+        description: String,
+        selected: Boolean,
+        action: () -> Unit
+    ): ImageView = ImageView(context).apply {
+        setImageResource(iconRes)
+        contentDescription = description
+        scaleType = ImageView.ScaleType.CENTER_INSIDE
+        setPadding(dp(7), dp(5), dp(7), dp(5))
+        background = modePillBackground(selected)
+        isClickable = true
+        addPressFeedback(this)
+        setOnClickListener { action() }
+    }
+
+    private fun modePillBackground(selected: Boolean): Drawable =
+        if (selected) {
+            gradientRounded(
+                intArrayOf(Color.parseColor("#4F9EFF"), Color.parseColor("#244AAB")),
+                Color.parseColor("#B8D9FF"),
+                12,
+                1
+            )
+        } else {
+            gradientRounded(
+                intArrayOf(Color.parseColor("#35466E"), Color.parseColor("#1D2847")),
+                Color.parseColor("#647BAE"),
+                12,
+                1
+            )
+        }
+
+    private fun updateModePills() {
+        calculatorModePill?.background = modePillBackground(!formulaModeEnabled)
+        formulaModePill?.background = modePillBackground(formulaModeEnabled)
+    }
+
+    private fun showCalculatorMode() {
+        if (!formulaModeEnabled || modeTransitionRunning) return
+        formulaDetailOpen = false
+        formulaBackButton?.visibility = View.GONE
+        formulaModeEnabled = false
+        updateModePills()
+        animateModeTransition(calculatorBody, formulaBody)
+    }
+
+    private fun showFormulaMode() {
+        if (formulaModeEnabled || modeTransitionRunning) return
+        formulaModeEnabled = true
+        formulaDetailOpen = false
+        formulaBackButton?.visibility = View.GONE
+        updateModePills()
+        animateModeTransition(formulaBody, calculatorBody)
+    }
+
+    private fun animateModeTransition(incoming: View, outgoing: View) {
+        modeTransitionRunning = true
+        outgoing.pivotX = outgoing.width / 2f
+        outgoing.pivotY = outgoing.height / 2f
+        incoming.pivotX = incoming.width / 2f
+        incoming.pivotY = incoming.height / 2f
+        outgoing.animate()
+            .rotationY(90f)
+            .alpha(0f)
+            .setDuration(180)
+            .withEndAction {
+                outgoing.visibility = View.GONE
+                outgoing.rotationY = 0f
+                incoming.visibility = View.VISIBLE
+                incoming.alpha = 0f
+                incoming.rotationY = -90f
+                incoming.animate()
+                    .rotationY(0f)
+                    .alpha(1f)
+                    .setDuration(180)
+                    .withEndAction {
+                        modeTransitionRunning = false
+                        notifyContentSizeChanged()
+                    }
+                    .start()
+            }
+            .start()
+    }
+
+    private fun showFormulaGrid() {
+        if (!formulaModeEnabled || modeTransitionRunning) return
+        formulaDetailOpen = false
+        formulaBackButton?.visibility = View.GONE
+        swapFormulaContent(buildFormulaGrid())
+    }
+
+    private fun openFormulaCard(card: FormulaCard) {
+        if (!formulaModeEnabled || modeTransitionRunning) return
+        formulaDetailOpen = true
+        formulaBackButton?.visibility = View.VISIBLE
+        swapFormulaContent(buildFormulaDetail(card))
+    }
+
+    private fun swapFormulaContent(next: View) {
+        val old = formulaBody.getChildAt(0)
+        val params = FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT,
+            FrameLayout.LayoutParams.WRAP_CONTENT
+        )
+        formulaBody.addView(next, params)
+        next.pivotX = next.width / 2f
+        next.pivotY = next.height / 2f
+        next.alpha = 0f
+        next.rotationY = -90f
+        if (old == null) {
+            next.alpha = 1f
+            next.rotationY = 0f
+            notifyContentSizeChanged()
+            return
+        }
+        old.pivotX = old.width / 2f
+        old.pivotY = old.height / 2f
+        old.animate()
+            .rotationY(90f)
+            .alpha(0f)
+            .setDuration(150)
+            .withEndAction {
+                formulaBody.removeView(old)
+                next.visibility = View.VISIBLE
+                next.animate()
+                    .rotationY(0f)
+                    .alpha(1f)
+                    .setDuration(150)
+                    .withEndAction { notifyContentSizeChanged() }
+                    .start()
+            }
+            .start()
+    }
+
+    private fun buildFormulaGrid(): View {
+        val scroll = ScrollView(context).apply {
+            isFillViewport = true
+            isVerticalScrollBarEnabled = false
+            overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
+            setPadding(dp(6), dp(4), dp(6), dp(6))
+        }
+        val stack = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+        stack.addView(TextView(context).apply {
+            text = "FORMULA VAULT"
+            textSize = 13f
+            typeface = Typeface.DEFAULT_BOLD
+            letterSpacing = 0.12f
+            gravity = Gravity.CENTER
+            setTextColor(Color.parseColor("#D8E7FF"))
+            background = gradientRounded(
+                intArrayOf(Color.parseColor("#3C5B9C"), Color.parseColor("#241E5A")),
+                Color.parseColor("#9DC9FF"),
+                14,
+                1
+            )
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(34)
+            ).apply {
+                bottomMargin = dp(7)
+            }
+        })
+
+        formulaCards.chunked(2).forEach { rowCards ->
+            val row = LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.TOP
+            }
+            rowCards.forEach { card ->
+                row.addView(
+                    formulaCardView(card),
+                    LinearLayout.LayoutParams(0, dp(136), 1f).apply {
+                        leftMargin = dp(3)
+                        rightMargin = dp(3)
+                        bottomMargin = dp(7)
+                    }
+                )
+            }
+            if (rowCards.size == 1) {
+                row.addView(
+                    View(context),
+                    LinearLayout.LayoutParams(0, dp(136), 1f).apply {
+                        leftMargin = dp(3)
+                        rightMargin = dp(3)
+                    }
+                )
+            }
+            stack.addView(
+                row,
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    dp(143)
+                )
+            )
+        }
+        scroll.addView(
+            stack,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT
+            )
+        )
+        return scroll
+    }
+
+    private fun formulaCardView(card: FormulaCard): View =
+        LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setPadding(dp(4), dp(4), dp(4), dp(4))
+            background = gradientRounded(
+                intArrayOf(Color.parseColor("#243967"), Color.parseColor("#171A37")),
+                Color.parseColor("#638DDE"),
+                16,
+                1
+            )
+            elevation = dp(5).toFloat()
+            isClickable = true
+            contentDescription = "Open ${card.title}"
+            addPressFeedback(this)
+            setOnClickListener { openFormulaCard(card) }
+            addView(ImageView(context).apply {
+                setImageBitmap(decodeFormulaThumbnail(card.imageRes))
+                scaleType = ImageView.ScaleType.FIT_CENTER
+                contentDescription = card.title
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    dp(96)
+                )
+            })
+            addView(TextView(context).apply {
+                text = card.title
+                textSize = 10f
+                typeface = Typeface.DEFAULT_BOLD
+                gravity = Gravity.CENTER
+                maxLines = 2
+                setTextColor(Color.WHITE)
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    dp(28)
+                )
+            })
+        }
+
+    private fun decodeFormulaThumbnail(imageRes: Int): Bitmap? {
+        val options = BitmapFactory.Options().apply {
+            inSampleSize = 4
+            inPreferredConfig = Bitmap.Config.RGB_565
+        }
+        return BitmapFactory.decodeResource(resources, imageRes, options)
+    }
+
+    private fun buildFormulaDetail(card: FormulaCard): View {
+        val detail = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(7), dp(5), dp(7), dp(7))
+        }
+        detail.addView(TextView(context).apply {
+            text = card.title
+            textSize = 15f
+            typeface = Typeface.DEFAULT_BOLD
+            gravity = Gravity.CENTER
+            setTextColor(Color.WHITE)
+            background = gradientRounded(
+                intArrayOf(Color.parseColor("#4B75C1"), Color.parseColor("#29245D")),
+                Color.parseColor("#A7D1FF"),
+                14,
+                1
+            )
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(36)
+            ).apply {
+                bottomMargin = dp(4)
+            }
+        })
+        detail.addView(TextView(context).apply {
+            text = card.description
+            textSize = 10f
+            gravity = Gravity.CENTER
+            setTextColor(Color.parseColor("#B8C8EF"))
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(28)
+            )
+        })
+
+        val drawable = resources.getDrawable(card.imageRes, null)
+        val availableWidth = (if (width > 0) width else resources.displayMetrics.widthPixels) -
+            dp(30)
+        val imageHeight = if (drawable.intrinsicWidth > 0 && drawable.intrinsicHeight > 0) {
+            (availableWidth.coerceAtLeast(dp(220)) * drawable.intrinsicHeight.toFloat() /
+                drawable.intrinsicWidth.toFloat()).roundToInt()
+        } else {
+            dp(220)
+        }
+        val viewportHeight = imageHeight.coerceIn(dp(170), dp(520))
+        val image = ZoomableFormulaImageView(context).apply {
+            setImageResource(card.imageRes)
+            contentDescription = "${card.title}. Pinch to zoom and drag to inspect."
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                imageHeight.coerceAtLeast(dp(170))
+            )
+        }
+        detail.addView(
+            ScrollView(context).apply {
+                isFillViewport = false
+                isVerticalScrollBarEnabled = true
+                overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
+                setBackgroundColor(Color.parseColor("#0B1020"))
+                addView(image)
+            },
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                viewportHeight
+            )
+        )
+        return detail
+    }
+
+    private fun notifyContentSizeChanged() {
+        post {
+            requestLayout()
+            onContentSizeChanged()
+        }
+    }
+
+    private class ZoomableFormulaImageView(context: Context) : ImageView(context) {
+        private val renderMatrix = Matrix()
+        private var zoom = 1f
+        private var panX = 0f
+        private var panY = 0f
+        private var lastX = 0f
+        private var lastY = 0f
+        private val scaleDetector = ScaleGestureDetector(
+            context,
+            object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
+                override fun onScale(detector: ScaleGestureDetector): Boolean {
+                    zoom = (zoom * detector.scaleFactor).coerceIn(1f, 4f)
+                    applyImageMatrix()
+                    return true
+                }
+            }
+        )
+
+        init {
+            scaleType = ScaleType.MATRIX
+            isClickable = true
+            setBackgroundColor(Color.parseColor("#0B1020"))
+        }
+
+        override fun onSizeChanged(width: Int, height: Int, oldWidth: Int, oldHeight: Int) {
+            super.onSizeChanged(width, height, oldWidth, oldHeight)
+            applyImageMatrix()
+        }
+
+        override fun onTouchEvent(event: MotionEvent): Boolean {
+            scaleDetector.onTouchEvent(event)
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    lastX = event.x
+                    lastY = event.y
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    if (!scaleDetector.isInProgress && zoom > 1f) {
+                        panX += event.x - lastX
+                        panY += event.y - lastY
+                        applyImageMatrix()
+                    }
+                    lastX = event.x
+                    lastY = event.y
+                }
+            }
+            return true
+        }
+
+        private fun applyImageMatrix() {
+            val image = drawable ?: return
+            if (width <= 0 || height <= 0 || image.intrinsicWidth <= 0 ||
+                image.intrinsicHeight <= 0
+            ) {
+                return
+            }
+            val baseScale = minOf(
+                width.toFloat() / image.intrinsicWidth.toFloat(),
+                height.toFloat() / image.intrinsicHeight.toFloat()
+            )
+            val scale = baseScale * zoom
+            val displayedWidth = image.intrinsicWidth * scale
+            val displayedHeight = image.intrinsicHeight * scale
+            val maxPanX = ((displayedWidth - width) / 2f).coerceAtLeast(0f)
+            val maxPanY = ((displayedHeight - height) / 2f).coerceAtLeast(0f)
+            panX = panX.coerceIn(-maxPanX, maxPanX)
+            panY = panY.coerceIn(-maxPanY, maxPanY)
+            renderMatrix.reset()
+            renderMatrix.setScale(scale, scale)
+            renderMatrix.postTranslate(
+                (width - displayedWidth) / 2f + panX,
+                (height - displayedHeight) / 2f + panY
+            )
+            imageMatrix = renderMatrix
+        }
     }
 
     private fun bracketButtonGroup(): View = LinearLayout(context).apply {
