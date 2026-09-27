@@ -150,6 +150,21 @@ class FloatingCalculatorView(
             "Graphical intuition and the derivative test for extrema."
         ),
         FormulaCard(
+            "Algebra & Quadratic Equations",
+            R.drawable.formula_algebra_quadratics,
+            "Algebraic identities, factorization, quadratic equations, roots and graphs."
+        ),
+        FormulaCard(
+            "Differentiation & Integration",
+            R.drawable.formula_differentiation_integration,
+            "Derivatives, the chain rule for functions of x, extrema, integrals and substitution."
+        ),
+        FormulaCard(
+            "Coordinate Geometry",
+            R.drawable.formula_coordinate_geometry,
+            "Distance, section and midpoint formulas, lines, circles and parabolas."
+        ),
+        FormulaCard(
             "Science Conversions I",
             R.drawable.formula_science_conversions_1,
             "Volume, pressure, SI prefixes, light year, energy and the gas constant."
